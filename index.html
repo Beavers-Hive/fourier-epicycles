@@ -34,16 +34,35 @@
   header h1 span { color: var(--accent); }
   header p { font-size: 12px; color: var(--dim); }
   #toolbar {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
-    padding: 8px 16px;
     background: color-mix(in srgb, var(--panel) 70%, transparent);
     border-top: 1px solid #232c4d;
     border-bottom: 1px solid #232c4d;
     font-size: 12.5px;
   }
+  .toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 8px 16px;
+  }
+  #toolbarExtra {
+    border-top: 1px solid #1c2340;
+    max-height: 200px;
+    opacity: 1;
+    overflow: hidden;
+    transition: max-height .25s ease, opacity .2s ease, padding .25s ease;
+  }
+  #toolbarExtra.collapsed {
+    max-height: 0;
+    opacity: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-top-width: 0;
+  }
+  #settingsBtn { margin-left: auto; }
+  #settingsBtn .arrow { display: inline-block; transition: transform .25s; }
+  #settingsBtn.open .arrow { transform: rotate(180deg); }
   .ctrl { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
   .ctrl label { color: var(--dim); }
   .ctrl output { color: var(--accent); font-variant-numeric: tabular-nums; min-width: 3ch; text-align: right; }
@@ -104,38 +123,43 @@
 </header>
 
 <div id="toolbar">
-  <button id="doneBtn" class="primary">✓ 完成（アニメ開始）</button>
-  <button id="undoBtn">1画戻す</button>
-  <button id="clearBtn">クリア</button>
-  <div class="ctrl">
-    <label for="method">複数ストロークの方式</label>
-    <select id="method">
-      <option value="bridge">A: 一筆つなぎ（移動を隠す）</option>
-      <option value="multi">B: 同時に複数ペンで描く</option>
-    </select>
+  <div class="toolbar-row">
+    <button id="doneBtn" class="primary">✓ 完成（アニメ開始）</button>
+    <button id="undoBtn">1画戻す</button>
+    <button id="clearBtn">クリア</button>
+    <button id="settingsBtn" class="open">⚙ 設定 <span class="arrow">▾</span></button>
   </div>
-  <div class="ctrl">
-    <label for="circles">円の数</label>
-    <input type="range" id="circles" min="2" max="50" value="50">
-    <output id="circlesVal">50</output>
+  <div id="toolbarExtra" class="toolbar-row">
+    <div class="ctrl">
+      <label for="method">複数ストロークの方式</label>
+      <select id="method">
+        <option value="bridge">A: 一筆つなぎ（移動を隠す）</option>
+        <option value="multi">B: 同時に複数ペンで描く</option>
+      </select>
+    </div>
+    <div class="ctrl">
+      <label for="circles">円の数</label>
+      <input type="range" id="circles" min="2" max="50" value="50">
+      <output id="circlesVal">50</output>
+    </div>
+    <div class="ctrl">
+      <label for="speed">速さ</label>
+      <input type="range" id="speed" min="-8" max="8" value="0" step="1">
+      <output id="speedVal">×1.0</output>
+    </div>
+    <div class="ctrl">
+      <input type="checkbox" id="showOriginal" checked>
+      <label for="showOriginal">元の絵</label>
+    </div>
+    <div class="ctrl">
+      <input type="checkbox" id="showCircles" checked>
+      <label for="showCircles">円を表示</label>
+    </div>
+    <button data-preset="star">★ 星</button>
+    <button data-preset="heart">♥ ハート</button>
+    <button data-preset="note">♪ 音符</button>
+    <button data-preset="face">☺ 顔（複数ストローク）</button>
   </div>
-  <div class="ctrl">
-    <label for="speed">速さ</label>
-    <input type="range" id="speed" min="-8" max="8" value="0" step="1">
-    <output id="speedVal">×1.0</output>
-  </div>
-  <div class="ctrl">
-    <input type="checkbox" id="showOriginal" checked>
-    <label for="showOriginal">元の絵</label>
-  </div>
-  <div class="ctrl">
-    <input type="checkbox" id="showCircles" checked>
-    <label for="showCircles">円を表示</label>
-  </div>
-  <button data-preset="star">★ 星</button>
-  <button data-preset="heart">♥ ハート</button>
-  <button data-preset="note">♪ 音符</button>
-  <button data-preset="face">☺ 顔（複数ストローク）</button>
 </div>
 
 <div id="stage">
@@ -197,6 +221,8 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   window.addEventListener("resize", resize);
+  // ツールバーの開閉などでキャンバス領域の高さが変わったときも追従する
+  new ResizeObserver(resize).observe(document.getElementById("stage"));
 
   // ---------- 入力（マウス・タッチ共通） ----------
   function pos(e) {
@@ -401,6 +427,20 @@
   }
 
   // ---------- UI ----------
+  const settingsBtn = document.getElementById("settingsBtn");
+  const toolbarExtra = document.getElementById("toolbarExtra");
+  function setSettingsOpen(open) {
+    toolbarExtra.classList.toggle("collapsed", !open);
+    settingsBtn.classList.toggle("open", open);
+    try { localStorage.setItem("fe-settings-open", open ? "1" : "0"); } catch {}
+  }
+  settingsBtn.addEventListener("click", () => {
+    setSettingsOpen(toolbarExtra.classList.contains("collapsed"));
+  });
+  try {
+    if (localStorage.getItem("fe-settings-open") === "0") setSettingsOpen(false);
+  } catch {}
+
   document.getElementById("doneBtn").addEventListener("click", startAnimation);
   document.getElementById("clearBtn").addEventListener("click", clearAll);
   document.getElementById("undoBtn").addEventListener("click", () => {
