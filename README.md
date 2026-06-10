@@ -3,7 +3,7 @@
 キャンバスに描いた絵をフーリエ変換（DFT）で「回転する円の連なり」に分解し、
 円の軌跡だけで絵を再現するブラウザアプリ。
 
-**Demo:** https://saitetu.github.io/fourier-epicycles/
+**Demo:** https://beavers-hive.github.io/fourier-epicycles/
 
 ## 使い方
 

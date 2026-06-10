@@ -116,8 +116,8 @@
   </div>
   <div class="ctrl">
     <label for="circles">円の数</label>
-    <input type="range" id="circles" min="2" max="256" value="64">
-    <output id="circlesVal">64</output>
+    <input type="range" id="circles" min="2" max="50" value="50">
+    <output id="circlesVal">50</output>
   </div>
   <div class="ctrl">
     <label for="speed">速さ</label>
@@ -151,6 +151,8 @@
 
   const SAMPLES_B = 512;   // 方式B: 1ストロークあたりのサンプル数
   const MAX_SAMPLES_A = 2048;
+  const MAX_CIRCLES = 50;  // 円の数の上限
+  const TRAIL_FACTOR = 2;  // 軌跡を保持する長さ（一周分 × この係数）
 
   // 方式Bでストロークごとに使う色 (r,g,b)
   const PALETTE = [
@@ -355,7 +357,7 @@
     isBridge = bridgeFlags(total, bridges, NA);
     coeffsA = dft(rs);
     trailA = [];
-    circlesSlider.max = Math.min(384, coeffsA.length);
+    circlesSlider.max = Math.min(MAX_CIRCLES, coeffsA.length);
     return true;
   }
 
@@ -373,7 +375,7 @@
       }
       return { coeffs: dft(rs), trail: [], color: PALETTE[i % PALETTE.length], flags };
     }).filter(Boolean);
-    circlesSlider.max = Math.min(256, SAMPLES_B);
+    circlesSlider.max = Math.min(MAX_CIRCLES, SAMPLES_B);
     return systems.length > 0;
   }
 
@@ -602,7 +604,7 @@
       const tip = chainTip(coeffsA, m, 1);
       const gap = isBridge[Math.floor(t / (2 * Math.PI) * NA) % NA];
       trailA.push({ x: tip.x, y: tip.y, gap });
-      if (trailA.length > NA) trailA.shift();
+      if (trailA.length > NA * TRAIL_FACTOR) trailA.shift();
       drawTrail(trailA, PALETTE[0]);
       drawPen(tip.x, tip.y, gap ? "#7a86ad" : "#ff6ec7"); // 移動中はペンを灰色に
       statusEl.textContent =
@@ -616,7 +618,7 @@
         const tip = chainTip(sys.coeffs, m, alpha);
         const gap = sys.flags ? sys.flags[idx] : false;
         sys.trail.push({ x: tip.x, y: tip.y, gap });
-        if (sys.trail.length > SAMPLES_B) sys.trail.shift();
+        if (sys.trail.length > SAMPLES_B * TRAIL_FACTOR) sys.trail.shift();
         drawTrail(sys.trail, sys.color);
         drawPen(tip.x, tip.y, gap ? "#7a86ad" : `rgb(${sys.color})`);
       }
