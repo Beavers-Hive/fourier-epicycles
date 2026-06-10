@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>フーリエ・エピサイクル — 円の軌跡でお絵かき</title>
+<style>
+  :root {
+    --bg: #0b0e1a;
+    --panel: #141a2e;
+    --accent: #4fd1ff;
+    --accent2: #ff6ec7;
+    --text: #dbe4ff;
+    --dim: #7a86ad;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(1200px 800px at 50% -10%, #1a2240 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: "Hiragino Sans", "Noto Sans JP", sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    padding: 10px 16px 6px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 17px; font-weight: 700; letter-spacing: .04em; }
+  header h1 span { color: var(--accent); }
+  header p { font-size: 12px; color: var(--dim); }
+  #toolbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 8px 16px;
+    background: color-mix(in srgb, var(--panel) 70%, transparent);
+    border-top: 1px solid #232c4d;
+    border-bottom: 1px solid #232c4d;
+    font-size: 12.5px;
+  }
+  .ctrl { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+  .ctrl label { color: var(--dim); }
+  .ctrl output { color: var(--accent); font-variant-numeric: tabular-nums; min-width: 3ch; text-align: right; }
+  input[type=range] { accent-color: var(--accent); width: 120px; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  select {
+    background: #1d2545;
+    color: var(--text);
+    border: 1px solid #2e3a6b;
+    border-radius: 8px;
+    padding: 5px 8px;
+    font-size: 12.5px;
+  }
+  button {
+    background: #1d2545;
+    color: var(--text);
+    border: 1px solid #2e3a6b;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  button:hover { background: #27305c; border-color: var(--accent); }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+  #stage { position: relative; flex: 1; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+  #hint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    color: var(--dim);
+    font-size: 15px;
+    text-align: center;
+    line-height: 1.9;
+    transition: opacity .3s;
+  }
+  #hint.hidden { opacity: 0; }
+  #status {
+    position: absolute;
+    left: 14px;
+    bottom: 12px;
+    font-size: 11.5px;
+    color: var(--dim);
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>フーリエ・エピサイクル <span>— 円の軌跡でお絵かき</span></h1>
+  <p>描いた絵をフーリエ展開し、回転する円の連なりだけで再現します（複数ストロークOK）</p>
+</header>
+
+<div id="toolbar">
+  <button id="doneBtn" class="primary">✓ 完成（アニメ開始）</button>
+  <button id="undoBtn">1画戻す</button>
+  <button id="clearBtn">クリア</button>
+  <div class="ctrl">
+    <label for="method">複数ストロークの方式</label>
+    <select id="method">
+      <option value="bridge">A: 一筆つなぎ（移動を隠す）</option>
+      <option value="multi">B: 同時に複数ペンで描く</option>
+    </select>
+  </div>
+  <div class="ctrl">
+    <label for="circles">円の数</label>
+    <input type="range" id="circles" min="2" max="256" value="64">
+    <output id="circlesVal">64</output>
+  </div>
+  <div class="ctrl">
+    <label for="speed">速さ</label>
+    <input type="range" id="speed" min="-8" max="8" value="0" step="1">
+    <output id="speedVal">×1.0</output>
+  </div>
+  <div class="ctrl">
+    <input type="checkbox" id="showOriginal" checked>
+    <label for="showOriginal">元の絵</label>
+  </div>
+  <div class="ctrl">
+    <input type="checkbox" id="showCircles" checked>
+    <label for="showCircles">円を表示</label>
+  </div>
+  <button data-preset="star">★ 星</button>
+  <button data-preset="heart">♥ ハート</button>
+  <button data-preset="note">♪ 音符</button>
+  <button data-preset="face">☺ 顔（複数ストローク）</button>
+</div>
+
+<div id="stage">
+  <canvas id="canvas"></canvas>
+  <div id="hint">マウスやタッチで絵を描いてください（複数の線に分けてもOK）<br>
+    描き終わったら「✓ 完成」を押すと、円の軌跡だけで絵をなぞり始めます</div>
+  <div id="status"></div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const SAMPLES_B = 512;   // 方式B: 1ストロークあたりのサンプル数
+  const MAX_SAMPLES_A = 2048;
+
+  // 方式Bでストロークごとに使う色 (r,g,b)
+  const PALETTE = [
+    "79,209,255", "255,110,199", "125,255,155", "255,209,102",
+    "180,139,255", "255,155,107", "107,255,234",
+  ];
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const hint = document.getElementById("hint");
+  const statusEl = document.getElementById("status");
+
+  const circlesSlider = document.getElementById("circles");
+  const circlesVal = document.getElementById("circlesVal");
+  const speedSlider = document.getElementById("speed");
+  const speedVal = document.getElementById("speedVal");
+  const showOriginal = document.getElementById("showOriginal");
+  const showCircles = document.getElementById("showCircles");
+  const methodSel = document.getElementById("method");
+
+  let mode = "draw";        // "draw" | "animate"
+  let strokes = [];         // {pts: [{x,y}], closed: bool}
+  let current = null;       // 描画中のストローク点列
+  let t = 0;                // 位相 0..2π
+  let dpr = 1;
+
+  // 方式A（一筆つなぎ）の状態
+  let coeffsA = [];
+  let isBridge = [];        // 各サンプルが「ストローク間の移動区間」か
+  let trailA = [];
+  let NA = 512;
+
+  // 方式B（同時描画）の状態
+  let systems = [];         // {coeffs, trail, color}
+
+  // ---------- キャンバスサイズ ----------
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    const r = canvas.getBoundingClientRect();
+    canvas.width = Math.round(r.width * dpr);
+    canvas.height = Math.round(r.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+
+  // ---------- 入力（マウス・タッチ共通） ----------
+  function pos(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+  canvas.addEventListener("pointerdown", e => {
+    if (mode === "animate") return;
+    canvas.setPointerCapture(e.pointerId);
+    current = [pos(e)];
+    hint.classList.add("hidden");
+  });
+  canvas.addEventListener("pointermove", e => {
+    if (!current) return;
+    const p = pos(e);
+    const last = current[current.length - 1];
+    if (Math.hypot(p.x - last.x, p.y - last.y) > 1.5) current.push(p);
+  });
+  canvas.addEventListener("pointerup", () => {
+    if (!current) return;
+    if (current.length >= 3 && strokeLength(current) > 6) {
+      strokes.push({ pts: current, closed: isClosedStroke(current) });
+    }
+    current = null;
+    if (!strokes.length) hint.classList.remove("hidden");
+  });
+
+  function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+  function strokeLength(pts) {
+    let len = 0;
+    for (let i = 1; i < pts.length; i++) len += dist(pts[i - 1], pts[i]);
+    return len;
+  }
+  // 始点と終点が近ければ閉じたストロークとみなす
+  function isClosedStroke(pts) {
+    return dist(pts[0], pts[pts.length - 1]) <
+           Math.max(24, strokeLength(pts) * 0.1);
+  }
+
+  // 橋区間（弧長の [開始,終了] リスト）を各サンプルのフラグに変換する。
+  // 円が少なくてもはみ出しが隠れるよう前後に少し広げる。
+  function bridgeFlags(total, bridges, n) {
+    const eps = total / n * 2;
+    const flags = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const s = total * i / n;
+      flags[i] = bridges.some(([a, b]) => s >= a - eps && s <= b + eps);
+    }
+    return flags;
+  }
+
+  // ---------- リサンプリング（閉曲線として弧長で均等化） ----------
+  function resampleClosed(pts, n) {
+    const closed = pts.concat([pts[0]]);
+    const cum = [0];
+    for (let i = 1; i < closed.length; i++) {
+      cum.push(cum[i - 1] + Math.hypot(
+        closed[i].x - closed[i - 1].x, closed[i].y - closed[i - 1].y));
+    }
+    const total = cum[cum.length - 1];
+    if (total === 0) return null;
+    const out = [];
+    let j = 0;
+    for (let i = 0; i < n; i++) {
+      const target = total * i / n;
+      while (cum[j + 1] < target) j++;
+      const seg = cum[j + 1] - cum[j] || 1;
+      const f = (target - cum[j]) / seg;
+      out.push({
+        x: closed[j].x + (closed[j + 1].x - closed[j].x) * f,
+        y: closed[j].y + (closed[j + 1].y - closed[j].y) * f,
+      });
+    }
+    return out;
+  }
+
+  // ---------- 離散フーリエ変換 ----------
+  // 点列を複素数列 z_n = x_n + i y_n とみなし、
+  // c_k = (1/N) Σ z_n e^{-2πikn/N} を全周波数について計算する。
+  // 各 c_k が「半径 |c_k|、初期角 arg(c_k)、回転速度 k」の円ひとつに対応する。
+  function dft(points) {
+    const N = points.length;
+    const out = [];
+    for (let k = 0; k < N; k++) {
+      const freq = k <= N / 2 ? k : k - N; // 負の周波数（逆回転の円）も使う
+      let re = 0, im = 0;
+      for (let n = 0; n < N; n++) {
+        const phi = -2 * Math.PI * k * n / N;
+        const c = Math.cos(phi), s = Math.sin(phi);
+        re += points[n].x * c - points[n].y * s;
+        im += points[n].x * s + points[n].y * c;
+      }
+      re /= N; im /= N;
+      out.push({ freq, amp: Math.hypot(re, im), phase: Math.atan2(im, re) });
+    }
+    out.sort((a, b) => b.amp - a.amp); // 大きい円から順に繋ぐ
+    return out;
+  }
+
+  // ---------- 方式A: 全ストロークを橋でつないで1本の閉路にする ----------
+  // 各ストロークは一度だけなぞり、ストローク間の移動はすべて「隠す橋」にする。
+  function buildBridged() {
+    // 貪欲法: 現在位置から最短で繋がるストロークを選ぶ。
+    // 閉じたストロークは任意の点を始点にできる（回転）。
+    // 開いたストロークは端点からのみ入れる（必要なら向きを反転）。
+    const rest = strokes.map(st => ({ pts: st.pts.slice(), closed: st.closed }));
+    const endPoint = st => st.closed ? st.pts[0] : st.pts[st.pts.length - 1];
+    const ordered = [rest.shift()];
+    let cur = endPoint(ordered[0]);
+    while (rest.length) {
+      let bi = 0, bd = Infinity, prep = null;
+      rest.forEach((st, li) => {
+        if (st.closed) {
+          st.pts.forEach((p, pi) => {
+            const d = dist(p, cur);
+            if (d < bd) { bd = d; bi = li; prep = { rotate: pi, reverse: false }; }
+          });
+        } else {
+          const d0 = dist(st.pts[0], cur);
+          const d1 = dist(st.pts[st.pts.length - 1], cur);
+          if (d0 < bd) { bd = d0; bi = li; prep = { rotate: 0, reverse: false }; }
+          if (d1 < bd) { bd = d1; bi = li; prep = { rotate: 0, reverse: true }; }
+        }
+      });
+      const st = rest.splice(bi, 1)[0];
+      if (prep.rotate) st.pts = st.pts.slice(prep.rotate).concat(st.pts.slice(0, prep.rotate));
+      if (prep.reverse) st.pts.reverse();
+      ordered.push(st);
+      cur = endPoint(st);
+    }
+
+    // 連結しつつ、橋（ストローク間の移動）区間を弧長で記録する
+    const pts = [];
+    const bridges = []; // [開始弧長, 終了弧長]
+    let arc = 0;
+    const push = (p, isB) => {
+      if (pts.length) {
+        const q = pts[pts.length - 1];
+        const d = dist(p, q);
+        if (isB && d > 0) bridges.push([arc, arc + d]);
+        arc += d;
+      }
+      pts.push({ x: p.x, y: p.y });
+    };
+    ordered.forEach((st, i) => {
+      st.pts.forEach((p, k) => push(p, i > 0 && k === 0)); // 先頭への移動が橋
+      if (st.closed) push(st.pts[0], false);               // 閉じた線は輪を閉じる
+    });
+    // 終点から最初の始点へ戻る橋（resampleClosed が閉じる区間）
+    const closeD = dist(pts[pts.length - 1], pts[0]);
+    if (closeD > 0) bridges.push([arc, arc + closeD]);
+    const total = arc + closeD;
+
+    NA = Math.min(MAX_SAMPLES_A, 512 + 256 * (strokes.length - 1));
+    const rs = resampleClosed(pts, NA);
+    if (!rs) return false;
+    isBridge = bridgeFlags(total, bridges, NA);
+    coeffsA = dft(rs);
+    trailA = [];
+    circlesSlider.max = Math.min(384, coeffsA.length);
+    return true;
+  }
+
+  // ---------- 方式B: ストロークごとに独立した円のシステム ----------
+  function buildMulti() {
+    systems = strokes.map((st, i) => {
+      const rs = resampleClosed(st.pts, SAMPLES_B);
+      if (!rs) return null;
+      // 開いた線は、終点→始点へ戻る区間（resampleClosed が閉じる辺）を隠す
+      let flags = null;
+      if (!st.closed) {
+        const len = strokeLength(st.pts);
+        const closeD = dist(st.pts[st.pts.length - 1], st.pts[0]);
+        flags = bridgeFlags(len + closeD, [[len, len + closeD]], SAMPLES_B);
+      }
+      return { coeffs: dft(rs), trail: [], color: PALETTE[i % PALETTE.length], flags };
+    }).filter(Boolean);
+    circlesSlider.max = Math.min(256, SAMPLES_B);
+    return systems.length > 0;
+  }
+
+  function startAnimation() {
+    if (!strokes.length) return;
+    t = 0;
+    const ok = methodSel.value === "bridge" ? buildBridged() : buildMulti();
+    if (!ok) return;
+    circlesVal.textContent = circlesSlider.value;
+    mode = "animate";
+    hint.classList.add("hidden");
+  }
+
+  function clearAll() {
+    mode = "draw";
+    strokes = [];
+    current = null;
+    coeffsA = []; trailA = []; isBridge = [];
+    systems = [];
+    t = 0;
+    hint.classList.remove("hidden");
+    statusEl.textContent = "";
+  }
+
+  // ---------- UI ----------
+  document.getElementById("doneBtn").addEventListener("click", startAnimation);
+  document.getElementById("clearBtn").addEventListener("click", clearAll);
+  document.getElementById("undoBtn").addEventListener("click", () => {
+    if (mode !== "draw") return;
+    strokes.pop();
+    if (!strokes.length) hint.classList.remove("hidden");
+  });
+  methodSel.addEventListener("change", () => {
+    if (mode === "animate") startAnimation(); // 方式を変えたら作り直す
+  });
+  circlesSlider.addEventListener("input", () => {
+    circlesVal.textContent = circlesSlider.value;
+    trailA = [];                      // 円の数が変わると軌跡の形も変わるのでリセット
+    systems.forEach(s => s.trail = []);
+  });
+  function speedMul() { return Math.pow(2, speedSlider.value / 4); }
+  speedSlider.addEventListener("input", () => {
+    speedVal.textContent = "×" + speedMul().toFixed(1);
+  });
+
+  // ---------- プリセット図形（ストロークの配列を返す） ----------
+  function presetStrokes(name, w, h) {
+    const cx = w / 2, cy = h / 2, s = Math.min(w, h) * 0.36;
+    const circle = (x0, y0, r, n = 60) => {
+      const a = [];
+      for (let i = 0; i < n; i++) {
+        const th = 2 * Math.PI * i / n;
+        a.push({ x: x0 + r * Math.cos(th), y: y0 + r * Math.sin(th) });
+      }
+      return a;
+    };
+    if (name === "star") {
+      const pts = [];
+      for (let i = 0; i < 10; i++) {
+        const r = i % 2 === 0 ? s : s * 0.42;
+        const a = -Math.PI / 2 + Math.PI * i / 5;
+        pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+      }
+      return [{ pts, closed: true }];
+    }
+    if (name === "heart") {
+      const pts = [];
+      for (let i = 0; i < 200; i++) {
+        const a = 2 * Math.PI * i / 200;
+        const x = 16 * Math.pow(Math.sin(a), 3);
+        const y = 13 * Math.cos(a) - 5 * Math.cos(2 * a)
+                - 2 * Math.cos(3 * a) - Math.cos(4 * a);
+        pts.push({ x: cx + x * s / 17, y: cy - y * s / 17 });
+      }
+      return [{ pts, closed: true }];
+    }
+    if (name === "note") {
+      const pts = [];
+      for (let i = 0; i <= 40; i++) { // 符頭
+        const a = 2 * Math.PI * i / 40;
+        pts.push({ x: cx - s * 0.45 + s * 0.30 * Math.cos(a),
+                   y: cy + s * 0.62 + s * 0.20 * Math.sin(a) });
+      }
+      pts.push({ x: cx - s * 0.15, y: cy + s * 0.62 }); // 符頭右端
+      pts.push({ x: cx - s * 0.15, y: cy - s * 0.75 }); // 符幹を上へ
+      for (let i = 0; i <= 24; i++) { // 旗（カーブ）
+        const f = i / 24;
+        pts.push({ x: cx - s * 0.15 + s * 0.55 * Math.sin(f * Math.PI * 0.9),
+                   y: cy - s * 0.75 + s * 0.85 * f });
+      }
+      for (let i = 24; i >= 0; i--) { // 旗の内側を戻る
+        const f = i / 24;
+        pts.push({ x: cx - s * 0.15 + s * 0.38 * Math.sin(f * Math.PI * 0.9),
+                   y: cy - s * 0.68 + s * 0.78 * f });
+      }
+      pts.push({ x: cx - s * 0.15, y: cy + s * 0.62 });
+      return [{ pts, closed: true }];
+    }
+    if (name === "face") {
+      const mouth = [];
+      for (let i = 0; i <= 30; i++) {
+        const th = Math.PI * (0.25 + 0.5 * i / 30);
+        mouth.push({ x: cx + s * 0.55 * Math.cos(th), y: cy + s * 0.55 * Math.sin(th) });
+      }
+      return [
+        { pts: circle(cx, cy, s), closed: true },
+        { pts: circle(cx - s * 0.35, cy - s * 0.3, s * 0.10, 24), closed: true },
+        { pts: circle(cx + s * 0.35, cy - s * 0.3, s * 0.10, 24), closed: true },
+        { pts: mouth, closed: false },
+      ];
+    }
+    return [];
+  }
+  document.querySelectorAll("[data-preset]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const r = canvas.getBoundingClientRect();
+      strokes = presetStrokes(btn.dataset.preset, r.width, r.height);
+      startAnimation();
+    });
+  });
+
+  // ---------- 描画ヘルパー ----------
+  function drawStrokePath(pts, closed) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    if (closed) ctx.closePath();
+    ctx.stroke();
+  }
+
+  function drawOriginal(alpha) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = "#8fa3d9";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 5]);
+    for (const st of strokes) if (st.pts.length > 1) drawStrokePath(st.pts, st.closed);
+    ctx.restore();
+  }
+
+  // 円の連なりを描きながら先端座標を返す
+  function chainTip(coeffs, M, circleAlpha) {
+    let x = 0, y = 0;
+    ctx.lineWidth = 1;
+    for (let i = 0; i < M; i++) {
+      const { freq, amp, phase } = coeffs[i];
+      const px = x, py = y;
+      const a = freq * t + phase;
+      x += amp * Math.cos(a);
+      y += amp * Math.sin(a);
+      if (showCircles.checked && freq !== 0 && amp > 0.6) {
+        ctx.strokeStyle = `rgba(160,180,230,${0.28 * circleAlpha})`;
+        ctx.beginPath();
+        ctx.arc(px, py, amp, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(200,215,255,${0.45 * circleAlpha})`;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+      }
+    }
+    return { x, y };
+  }
+
+  // 軌跡（古いほど薄く、gap=橋区間は線を描かない）
+  function drawTrail(trail, rgb) {
+    if (trail.length < 2) return;
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = ctx.lineCap = "round";
+    ctx.shadowColor = `rgba(${rgb},0.8)`;
+    ctx.shadowBlur = 8;
+    const L = trail.length;
+    const step = Math.max(1, Math.floor(L / 64)); // セグメントを束ねて高速化
+    for (let i = 0; i < L - 1; i += step) {
+      const end = Math.min(i + step, L - 1);
+      ctx.strokeStyle = `rgba(${rgb},${0.08 + 0.92 * i / L})`;
+      ctx.beginPath();
+      let started = false;
+      for (let j = i; j <= end; j++) {
+        const p = trail[j];
+        if (p.gap) { started = false; continue; }
+        if (!started) { ctx.moveTo(p.x, p.y); started = true; }
+        else ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+  }
+
+  function drawPen(x, y, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+
+  // ---------- メインループ ----------
+  function frame() {
+    const r = canvas.getBoundingClientRect();
+    ctx.clearRect(0, 0, r.width, r.height);
+
+    if (mode === "draw") {
+      ctx.strokeStyle = "#dbe4ff";
+      ctx.lineWidth = 2;
+      ctx.lineJoin = ctx.lineCap = "round";
+      ctx.setLineDash([]);
+      for (const st of strokes) if (st.pts.length > 1) drawStrokePath(st.pts, false);
+      if (current && current.length > 1) drawStrokePath(current, false);
+      if (strokes.length) {
+        statusEl.textContent = `ストローク ${strokes.length} 本 ／ 「✓ 完成」でアニメ開始`;
+      }
+      requestAnimationFrame(frame);
+      return;
+    }
+
+    // --- アニメーション ---
+    if (showOriginal.checked) drawOriginal(0.22);
+    const pct = (t / (2 * Math.PI) * 100).toFixed(0);
+    const M = +circlesSlider.value;
+    let N; // 一周のサンプル数（位相の進み幅に使う）
+
+    if (methodSel.value === "bridge") {
+      N = NA;
+      const m = Math.min(M, coeffsA.length);
+      const tip = chainTip(coeffsA, m, 1);
+      const gap = isBridge[Math.floor(t / (2 * Math.PI) * NA) % NA];
+      trailA.push({ x: tip.x, y: tip.y, gap });
+      if (trailA.length > NA) trailA.shift();
+      drawTrail(trailA, PALETTE[0]);
+      drawPen(tip.x, tip.y, gap ? "#7a86ad" : "#ff6ec7"); // 移動中はペンを灰色に
+      statusEl.textContent =
+        `方式A: ${strokes.length} 本を一筆化 ／ 円 ${m} 個 ／ 一周 ${pct}%`;
+    } else {
+      N = SAMPLES_B;
+      const idx = Math.floor(t / (2 * Math.PI) * SAMPLES_B) % SAMPLES_B;
+      const alpha = Math.min(1, 1.6 / Math.sqrt(systems.length)); // 多いほど円を薄く
+      for (const sys of systems) {
+        const m = Math.min(M, sys.coeffs.length);
+        const tip = chainTip(sys.coeffs, m, alpha);
+        const gap = sys.flags ? sys.flags[idx] : false;
+        sys.trail.push({ x: tip.x, y: tip.y, gap });
+        if (sys.trail.length > SAMPLES_B) sys.trail.shift();
+        drawTrail(sys.trail, sys.color);
+        drawPen(tip.x, tip.y, gap ? "#7a86ad" : `rgb(${sys.color})`);
+      }
+      statusEl.textContent =
+        `方式B: ${systems.length} 本同時 ／ 円 ${Math.min(M, SAMPLES_B)} 個 ×${systems.length} ／ 一周 ${pct}%`;
+    }
+
+    t += (2 * Math.PI / N) * speedMul() * 2;
+    if (t >= 2 * Math.PI) t -= 2 * Math.PI;
+
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
