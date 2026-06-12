@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>ボイド — 3つのルールで群れが生まれる</title>
+<style>
+  :root {
+    --bg: #0b0e1a;
+    --panel: #141a2e;
+    --accent: #4fd1ff;
+    --accent2: #ff6ec7;
+    --text: #dbe4ff;
+    --dim: #7a86ad;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Hiragino Sans", "Noto Sans JP", sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    padding: 10px 16px 6px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 17px; font-weight: 700; letter-spacing: .04em; }
+  header h1 span { color: var(--accent); }
+  header p { font-size: 12px; color: var(--dim); }
+  header nav { margin-left: auto; font-size: 12px; display: flex; gap: 12px; }
+  header nav a { color: var(--dim); text-decoration: none; }
+  header nav a:hover { color: var(--accent); }
+  #toolbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 8px 16px;
+    background: color-mix(in srgb, var(--panel) 70%, transparent);
+    border-top: 1px solid #232c4d;
+    border-bottom: 1px solid #232c4d;
+    font-size: 12.5px;
+  }
+  .ctrl { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+  .ctrl label { color: var(--dim); }
+  .ctrl output { color: var(--accent); font-variant-numeric: tabular-nums; min-width: 3.5ch; text-align: right; }
+  input[type=range] { accent-color: var(--accent); width: 100px; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  button {
+    background: #1d2545;
+    color: var(--text);
+    border: 1px solid #2e3a6b;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  button:hover { background: #27305c; border-color: var(--accent); }
+  #stage { position: relative; flex: 1; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+  #status {
+    position: absolute;
+    left: 14px;
+    bottom: 12px;
+    font-size: 11.5px;
+    color: var(--dim);
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ボイド <span>— 3つのルールで群れが生まれる</span></h1>
+  <p>離れる・揃える・近づく。たったこれだけで鳥の大群が生まれます。マウスは天敵!</p>
+  <nav>
+    <a href="./">フーリエお絵かき</a>
+    <a href="pendulum.html">二重振り子カオス</a>
+  </nav>
+</header>
+
+<div id="toolbar">
+  <div class="ctrl">
+    <label for="count">数</label>
+    <input type="range" id="count" min="10" max="400" value="200" step="10">
+    <output id="countVal">200</output>
+  </div>
+  <div class="ctrl">
+    <label for="sep">① 離れる</label>
+    <input type="range" id="sep" min="0" max="200" value="100">
+    <output id="sepVal">×1.0</output>
+  </div>
+  <div class="ctrl">
+    <label for="ali">② 揃える</label>
+    <input type="range" id="ali" min="0" max="200" value="100">
+    <output id="aliVal">×1.0</output>
+  </div>
+  <div class="ctrl">
+    <label for="coh">③ 近づく</label>
+    <input type="range" id="coh" min="0" max="200" value="100">
+    <output id="cohVal">×1.0</output>
+  </div>
+  <div class="ctrl">
+    <input type="checkbox" id="predator" checked>
+    <label for="predator">マウス＝天敵</label>
+  </div>
+  <button id="resetBtn">散らし直す</button>
+</div>
+
+<div id="stage">
+  <canvas id="canvas"></canvas>
+  <div id="status"></div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // 知覚半径（px）。重みはスライダーで変える
+  const R_SEP = 26;        // ① 離れる: 近すぎる仲間を避ける
+  const R_VIEW = 55;       // ②③ 揃える・近づく: 見える仲間の範囲
+  const R_FLEE = 130;      // 天敵から逃げる範囲
+  const MAX_SPEED = 3.4;
+  const MIN_SPEED = 1.6;
+  const MAX_FORCE = 0.06;
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const statusEl = document.getElementById("status");
+
+  const countSlider = document.getElementById("count");
+  const sepSlider = document.getElementById("sep");
+  const aliSlider = document.getElementById("ali");
+  const cohSlider = document.getElementById("coh");
+  const predatorChk = document.getElementById("predator");
+
+  let boids = [];
+  let mouse = null;   // {x,y} 天敵の位置
+  let W = 0, H = 0;
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const r = canvas.getBoundingClientRect();
+    W = r.width; H = r.height;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+  new ResizeObserver(resize).observe(document.getElementById("stage"));
+
+  function reset() {
+    const n = +countSlider.value;
+    boids = [];
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * 2 * Math.PI;
+      const s = MIN_SPEED + Math.random() * (MAX_SPEED - MIN_SPEED);
+      boids.push({
+        x: Math.random() * W, y: Math.random() * H,
+        vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        hue: 190 + Math.random() * 50, // シアン〜青紫の個体差
+      });
+    }
+  }
+  document.getElementById("resetBtn").addEventListener("click", reset);
+  countSlider.addEventListener("input", () => {
+    document.getElementById("countVal").textContent = countSlider.value;
+    const n = +countSlider.value;
+    while (boids.length > n) boids.pop();
+    while (boids.length < n) {
+      const a = Math.random() * 2 * Math.PI;
+      boids.push({
+        x: Math.random() * W, y: Math.random() * H,
+        vx: Math.cos(a) * 2, vy: Math.sin(a) * 2,
+        hue: 190 + Math.random() * 50,
+      });
+    }
+  });
+  for (const [slider, out] of [[sepSlider, "sepVal"], [aliSlider, "aliVal"], [cohSlider, "cohVal"]]) {
+    slider.addEventListener("input", () => {
+      document.getElementById(out).textContent = "×" + (slider.value / 100).toFixed(1);
+    });
+  }
+
+  canvas.addEventListener("pointermove", e => {
+    const r = canvas.getBoundingClientRect();
+    mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
+  });
+  canvas.addEventListener("pointerleave", () => { mouse = null; });
+
+  // トーラス（画面端ループ）上での最短差分
+  function wrapDelta(d, size) {
+    if (d > size / 2) return d - size;
+    if (d < -size / 2) return d + size;
+    return d;
+  }
+
+  function limit(vx, vy, max) {
+    const m = Math.hypot(vx, vy);
+    if (m > max && m > 0) return [vx / m * max, vy / m * max];
+    return [vx, vy];
+  }
+
+  function step() {
+    const wSep = sepSlider.value / 100;
+    const wAli = aliSlider.value / 100;
+    const wCoh = cohSlider.value / 100;
+    const flee = predatorChk.checked && mouse;
+
+    for (const b of boids) {
+      let sx = 0, sy = 0, sn = 0;          // ① 離れる
+      let avx = 0, avy = 0, an = 0;        // ② 揃える
+      let cx = 0, cy = 0, cn = 0;          // ③ 近づく
+
+      for (const o of boids) {
+        if (o === b) continue;
+        const dx = wrapDelta(o.x - b.x, W);
+        const dy = wrapDelta(o.y - b.y, H);
+        const d2 = dx * dx + dy * dy;
+        if (d2 > R_VIEW * R_VIEW) continue;
+        const d = Math.sqrt(d2) || 1e-6;
+        if (d < R_SEP) { sx -= dx / d / d; sy -= dy / d / d; sn++; }
+        avx += o.vx; avy += o.vy; an++;
+        cx += dx; cy += dy; cn++;
+      }
+
+      let fx = 0, fy = 0;
+      if (sn) {
+        const [ux, uy] = limit(sx, sy, MAX_FORCE * 1.6);
+        fx += ux * wSep; fy += uy * wSep;
+      }
+      if (an) {
+        const [ux, uy] = limit(avx / an - b.vx, avy / an - b.vy, MAX_FORCE);
+        fx += ux * wAli; fy += uy * wAli;
+      }
+      if (cn) {
+        const [ux, uy] = limit(cx / cn, cy / cn, MAX_FORCE);
+        fx += ux * wCoh; fy += uy * wCoh;
+      }
+      if (flee) {
+        const dx = wrapDelta(b.x - mouse.x, W);
+        const dy = wrapDelta(b.y - mouse.y, H);
+        const d = Math.hypot(dx, dy);
+        if (d < R_FLEE && d > 0) {
+          const k = (1 - d / R_FLEE) * MAX_FORCE * 6;
+          fx += dx / d * k; fy += dy / d * k;
+        }
+      }
+
+      b.vx += fx; b.vy += fy;
+      let m = Math.hypot(b.vx, b.vy);
+      if (m > MAX_SPEED) { b.vx = b.vx / m * MAX_SPEED; b.vy = b.vy / m * MAX_SPEED; }
+      else if (m < MIN_SPEED && m > 0) { b.vx = b.vx / m * MIN_SPEED; b.vy = b.vy / m * MIN_SPEED; }
+    }
+    for (const b of boids) {
+      b.x = (b.x + b.vx + W) % W;
+      b.y = (b.y + b.vy + H) % H;
+    }
+  }
+
+  function draw() {
+    // 残像（薄く塗りつぶすと軌跡がうっすら残る）
+    ctx.fillStyle = "rgba(11,14,26,0.30)";
+    ctx.fillRect(0, 0, W, H);
+
+    for (const b of boids) {
+      const a = Math.atan2(b.vy, b.vx);
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      ctx.rotate(a);
+      ctx.fillStyle = `hsl(${b.hue} 90% 70%)`;
+      ctx.beginPath();
+      ctx.moveTo(6, 0);
+      ctx.lineTo(-4, 3);
+      ctx.lineTo(-2, 0);
+      ctx.lineTo(-4, -3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (predatorChk.checked && mouse) {
+      ctx.strokeStyle = "rgba(255,110,120,0.5)";
+      ctx.fillStyle = "rgba(255,90,100,0.9)";
+      ctx.beginPath();
+      ctx.arc(mouse.x, mouse.y, 5, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(mouse.x, mouse.y, R_FLEE, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+
+    statusEl.textContent =
+      `ボイド ${boids.length} 羽 ／ ルールは「離れる・揃える・近づく」の3つだけ`;
+  }
+
+  function frame() {
+    step();
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  reset();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

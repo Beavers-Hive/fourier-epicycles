@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>二重振り子カオス・レース — 0.001度が運命を分ける</title>
+<style>
+  :root {
+    --bg: #0b0e1a;
+    --panel: #141a2e;
+    --accent: #4fd1ff;
+    --accent2: #ff6ec7;
+    --text: #dbe4ff;
+    --dim: #7a86ad;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Hiragino Sans", "Noto Sans JP", sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    padding: 10px 16px 6px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 17px; font-weight: 700; letter-spacing: .04em; }
+  header h1 span { color: var(--accent); }
+  header p { font-size: 12px; color: var(--dim); }
+  header nav { margin-left: auto; font-size: 12px; display: flex; gap: 12px; }
+  header nav a { color: var(--dim); text-decoration: none; }
+  header nav a:hover { color: var(--accent); }
+  #toolbar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 8px 16px;
+    background: color-mix(in srgb, var(--panel) 70%, transparent);
+    border-top: 1px solid #232c4d;
+    border-bottom: 1px solid #232c4d;
+    font-size: 12.5px;
+  }
+  .ctrl { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+  .ctrl label { color: var(--dim); }
+  .ctrl output { color: var(--accent); font-variant-numeric: tabular-nums; min-width: 3.5ch; text-align: right; }
+  input[type=range] { accent-color: var(--accent); width: 100px; }
+  input[type=checkbox] { accent-color: var(--accent); }
+  select {
+    background: #1d2545;
+    color: var(--text);
+    border: 1px solid #2e3a6b;
+    border-radius: 8px;
+    padding: 5px 8px;
+    font-size: 12.5px;
+  }
+  button {
+    background: #1d2545;
+    color: var(--text);
+    border: 1px solid #2e3a6b;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  button:hover { background: #27305c; border-color: var(--accent); }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+  #stage { position: relative; flex: 1; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  #status {
+    position: absolute;
+    left: 14px;
+    bottom: 12px;
+    font-size: 11.5px;
+    color: var(--dim);
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+  }
+  #chaosBadge {
+    position: absolute;
+    right: 14px;
+    top: 12px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent2);
+    opacity: 0;
+    transition: opacity .4s;
+    pointer-events: none;
+  }
+  #chaosBadge.on { opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>二重振り子カオス・レース <span>— 0.001度が運命を分ける</span></h1>
+  <p>ほぼ同じ角度から放った振り子たち。最初は重なって動き、やがて突然バラバラに…</p>
+  <nav>
+    <a href="./">フーリエお絵かき</a>
+    <a href="boids.html">ボイドの群れ</a>
+  </nav>
+</header>
+
+<div id="toolbar">
+  <button id="restartBtn" class="primary">▶ リスタート</button>
+  <div class="ctrl">
+    <label for="count">本数</label>
+    <input type="range" id="count" min="2" max="100" value="50">
+    <output id="countVal">50</output>
+  </div>
+  <div class="ctrl">
+    <label for="delta">初期角度のずれ</label>
+    <select id="delta">
+      <option value="0.0001">0.0001°ずつ</option>
+      <option value="0.001" selected>0.001°ずつ</option>
+      <option value="0.01">0.01°ずつ</option>
+      <option value="0.1">0.1°ずつ</option>
+    </select>
+  </div>
+  <div class="ctrl">
+    <label for="speed">速さ</label>
+    <input type="range" id="speed" min="-4" max="4" value="0" step="1">
+    <output id="speedVal">×1.0</output>
+  </div>
+  <div class="ctrl">
+    <input type="checkbox" id="showTrail" checked>
+    <label for="showTrail">軌跡を残す</label>
+  </div>
+  <div class="ctrl">
+    <input type="checkbox" id="showArms">
+    <label for="showArms">腕を表示</label>
+  </div>
+</div>
+
+<div id="stage">
+  <canvas id="canvas"></canvas>
+  <div id="status"></div>
+  <div id="chaosBadge">⚡ カオス発生!</div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  // 物理パラメータ（質量1・腕長1の二重振り子）
+  const G = 9.81;
+  const DT = 1 / 240;        // 積分刻み（秒）
+  const SUBSTEPS = 4;        // 1フレームあたりの刻み数（×速さ）
+  const T1_INIT = 120 * Math.PI / 180; // 初期角度（鉛直下向きから120°）
+  const CHAOS_SPREAD = 40;   // 先端のばらつきがこのpxを超えたら「カオス発生」
+
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const statusEl = document.getElementById("status");
+  const chaosBadge = document.getElementById("chaosBadge");
+
+  const countSlider = document.getElementById("count");
+  const deltaSel = document.getElementById("delta");
+  const speedSlider = document.getElementById("speed");
+  const showTrail = document.getElementById("showTrail");
+  const showArms = document.getElementById("showArms");
+
+  let pendulums = [];   // {t1,t2,w1,w2,hue}
+  let simTime = 0;      // シミュレーション内の経過秒
+  let chaosAt = null;   // カオス発生時刻
+  let W = 0, H = 0;
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const r = canvas.getBoundingClientRect();
+    W = r.width; H = r.height;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    clearCanvas();
+  }
+  window.addEventListener("resize", resize);
+  new ResizeObserver(resize).observe(document.getElementById("stage"));
+
+  function clearCanvas() {
+    ctx.fillStyle = "#0b0e1a";
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function restart() {
+    const n = +countSlider.value;
+    const delta = (+deltaSel.value) * Math.PI / 180;
+    pendulums = [];
+    for (let i = 0; i < n; i++) {
+      pendulums.push({
+        t1: T1_INIT,
+        t2: T1_INIT + i * delta,  // ここが「ほんのわずかな違い」
+        w1: 0, w2: 0,
+        hue: 360 * i / n,
+      });
+    }
+    simTime = 0;
+    chaosAt = null;
+    chaosBadge.classList.remove("on");
+    clearCanvas();
+  }
+  document.getElementById("restartBtn").addEventListener("click", restart);
+  countSlider.addEventListener("input", () => {
+    document.getElementById("countVal").textContent = countSlider.value;
+  });
+  deltaSel.addEventListener("change", restart);
+  function speedMul() { return Math.pow(2, speedSlider.value / 2); }
+  speedSlider.addEventListener("input", () => {
+    document.getElementById("speedVal").textContent = "×" + speedMul().toFixed(1);
+  });
+  showTrail.addEventListener("change", clearCanvas);
+
+  // 二重振り子の運動方程式（m1=m2=1, l1=l2=1）
+  function deriv(t1, t2, w1, w2) {
+    const d = t1 - t2;
+    const cd = Math.cos(d), sd = Math.sin(d);
+    const den = 3 - Math.cos(2 * d); // 2m1+m2-m2cos(2d) = 3-cos(2d)
+    const a1 = (-G * 3 * Math.sin(t1) - G * Math.sin(t1 - 2 * t2)
+              - 2 * sd * (w2 * w2 + w1 * w1 * cd)) / den;
+    const a2 = (2 * sd * (w1 * w1 * 2 + G * 2 * Math.cos(t1) + w2 * w2 * cd)) / den;
+    return [w1, w2, a1, a2];
+  }
+
+  // RK4（4次ルンゲ・クッタ）で1刻み進める
+  function rk4(p, dt) {
+    const [k1a, k1b, k1c, k1d] = deriv(p.t1, p.t2, p.w1, p.w2);
+    const [k2a, k2b, k2c, k2d] = deriv(p.t1 + k1a * dt / 2, p.t2 + k1b * dt / 2,
+                                       p.w1 + k1c * dt / 2, p.w2 + k1d * dt / 2);
+    const [k3a, k3b, k3c, k3d] = deriv(p.t1 + k2a * dt / 2, p.t2 + k2b * dt / 2,
+                                       p.w1 + k2c * dt / 2, p.w2 + k2d * dt / 2);
+    const [k4a, k4b, k4c, k4d] = deriv(p.t1 + k3a * dt, p.t2 + k3b * dt,
+                                       p.w1 + k3c * dt, p.w2 + k3d * dt);
+    p.t1 += dt * (k1a + 2 * k2a + 2 * k3a + k4a) / 6;
+    p.t2 += dt * (k1b + 2 * k2b + 2 * k3b + k4b) / 6;
+    p.w1 += dt * (k1c + 2 * k2c + 2 * k3c + k4c) / 6;
+    p.w2 += dt * (k1d + 2 * k2d + 2 * k3d + k4d) / 6;
+  }
+
+  function tipPos(p, ox, oy, L) {
+    const x1 = ox + L * Math.sin(p.t1);
+    const y1 = oy + L * Math.cos(p.t1);
+    const x2 = x1 + L * Math.sin(p.t2);
+    const y2 = y1 + L * Math.cos(p.t2);
+    return [x1, y1, x2, y2];
+  }
+
+  function frame() {
+    const ox = W / 2, oy = H * 0.38;
+    const L = Math.min(W, H) * 0.21;
+    const steps = Math.round(SUBSTEPS * speedMul());
+
+    const prevTips = pendulums.map(p => tipPos(p, ox, oy, L));
+    for (let s = 0; s < steps; s++) {
+      for (const p of pendulums) rk4(p, DT);
+      simTime += DT;
+    }
+
+    // 描画: 「軌跡を残す」なら薄塗りで残像、そうでなければ全消去
+    if (showTrail.checked) {
+      ctx.fillStyle = "rgba(11,14,26,0.045)";
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      clearCanvas();
+    }
+
+    let minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = "round";
+    pendulums.forEach((p, i) => {
+      const [x1, y1, x2, y2] = tipPos(p, ox, oy, L);
+      const [, , px2, py2] = prevTips[i];
+      // 先端の軌跡（前フレーム位置から線で繋ぐ）
+      ctx.strokeStyle = `hsl(${p.hue} 90% 65%)`;
+      ctx.beginPath();
+      ctx.moveTo(px2, py2);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      if (showArms.checked) {
+        ctx.strokeStyle = `hsla(${p.hue} 80% 70% / 0.25)`;
+        ctx.beginPath();
+        ctx.moveTo(ox, oy);
+        ctx.lineTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+      minX = Math.min(minX, x2); maxX = Math.max(maxX, x2);
+      minY = Math.min(minY, y2); maxY = Math.max(maxY, y2);
+    });
+
+    // 支点
+    ctx.fillStyle = "#8fa3d9";
+    ctx.beginPath();
+    ctx.arc(ox, oy, 3, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // ばらつき（先端のバウンディングボックスの対角長）でカオス判定
+    const spread = pendulums.length > 1 ? Math.hypot(maxX - minX, maxY - minY) : 0;
+    if (chaosAt === null && spread > CHAOS_SPREAD) {
+      chaosAt = simTime;
+      chaosBadge.classList.add("on");
+    }
+    statusEl.textContent =
+      `振り子 ${pendulums.length} 本 ／ ずれ ${deltaSel.value}° ／ ` +
+      `経過 ${simTime.toFixed(1)} 秒 ／ ばらつき ${spread.toFixed(0)}px` +
+      (chaosAt !== null ? ` ／ ⚡ ${chaosAt.toFixed(1)} 秒でカオス化` : "");
+
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  countSlider.dispatchEvent(new Event("input"));
+  restart();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

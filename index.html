@@ -33,6 +33,9 @@
   header h1 { font-size: 17px; font-weight: 700; letter-spacing: .04em; }
   header h1 span { color: var(--accent); }
   header p { font-size: 12px; color: var(--dim); }
+  header nav { margin-left: auto; font-size: 12px; display: flex; gap: 12px; }
+  header nav a { color: var(--dim); text-decoration: none; }
+  header nav a:hover { color: var(--accent); }
   #toolbar {
     background: color-mix(in srgb, var(--panel) 70%, transparent);
     border-top: 1px solid #232c4d;
@@ -120,6 +123,10 @@
 <header>
   <h1>フーリエ・エピサイクル <span>— 円の軌跡でお絵かき</span></h1>
   <p>描いた絵をフーリエ展開し、回転する円の連なりだけで再現します（複数ストロークOK）</p>
+  <nav>
+    <a href="boids.html">ボイドの群れ</a>
+    <a href="pendulum.html">二重振り子カオス</a>
+  </nav>
 </header>
 
 <div id="toolbar">
